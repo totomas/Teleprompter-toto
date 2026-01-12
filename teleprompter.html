@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Teleprompter PRO</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: #000;
+    color: white;
+    font-family: system-ui, Arial;
+    overflow: hidden;
+}
+
+body[data-orientation="portrait"] textarea { height: 80px; }
+body[data-orientation="landscape"] textarea { height: 60px; }
+
+.app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+.editor {
+    background: #111;
+    padding: 6px;
+}
+
+textarea {
+    width: 100%;
+    background: #000;
+    color: white;
+    border: 1px solid #333;
+    padding: 6px;
+}
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+button {
+    background: #222;
+    border: none;
+    color: white;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+button.big {
+    font-size: 16px;
+    padding: 6px 14px;
+}
+
+.teleprompter {
+    flex: 1;
+    display: flex;
+}
+
+.screen {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background: black;
+}
+
+.content {
+    position: absolute;
+    bottom: -100%;
+    width: 100%;
+    padding: 40px 30px;
+    text-align: center;
+    line-height: 1.6;
+}
+
+.line {
+    margin-bottom: 18px;
+    opacity: 0.35;
+    transition: 0.25s;
+}
+
+.line.active {
+    opacity: 1;
+    transform: scale(1.05);
+}
+
+.marker {
+    color: #ffd740;
+    font-weight: bold;
+    margin: 30px 0;
+}
+
+.speaker {
+    font-weight: bold;
+}
+
+.mirror {
+    transform: scaleY(-1);
+}
+
+.tapZone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 50%;
+    z-index: 5;
+}
+
+.tapLeft { left: 0; }
+.tapRight { right: 0; }
+
+.statusBar {
+    font-size: 12px;
+    padding: 4px 10px;
+    background: #080808;
+}
+</style>
+</head>
+
+<body>
+
+<div class="app">
+
+<div class="editor">
+<textarea id="textInput">
+#Intro
+[Ana] Bienvenidos al programa.
+[Tomás] Control total con stylus.
+#Bloque
+[Ana] Vertical u horizontal automático.
+</textarea>
+
+<div class="controls">
+<button onclick="togglePlay()">▶ / ⏸</button>
+<button onclick="reset()">🔄</button>
+<button onclick="toggleMirror()">🪞</button>
+<button onclick="toggleFullscreen()">⛶</button>
+<button class="big" onclick="changeFont(4)">A+</button>
+<button class="big" onclick="changeFont(-4)">A-</button>
+
+<label>Vel
+<input type="range" id="speed" min="20" max="300" value="100">
+</label>
+
+<label>Texto
+<input type="range" id="fontSize" min="28" max="120" value="56">
+</label>
+</div>
+</div>
+
+<div class="statusBar">
+🖊️ Tap derecha = Avanzar · Tap izquierda = Retroceder · Girar tablet = Auto ajuste
+</div>
+
+<div class="teleprompter" id="teleprompter">
+<div class="screen" id="screen">
+    <div class="content" id="content"></div>
+
+    <div class="tapZone tapLeft"></div>
+    <div class="tapZone tapRight"></div>
+</div>
+</div>
+
+</div>
+
+<script>
+const content = document.getElementById("content");
+const textInput = document.getElementById("textInput");
+const speedInput = document.getElementById("speed");
+const fontSizeInput = document.getElementById("fontSize");
+const screen = document.getElementById("screen");
+
+let position = -window.innerHeight;
+let interval = null;
+let elements = [];
+let currentStep = 0;
+let orientation = "";
+
+const colors = ["#00e5ff","#ff4081","#ffd740","#69f0ae","#b388ff"];
+const speakerColors = {};
+
+/* ===== PARSE TEXTO ===== */
+function parseText() {
+    content.innerHTML = "";
+    elements = [];
+    currentStep = 0;
+    position = -window.innerHeight;
+
+    const lines = textInput.value.split("\n");
+
+    lines.forEach(line => {
+        if (!line.trim()) return;
+        let div = document.createElement("div");
+
+        if (line.startsWith("#")) {
+            div.className = "marker";
+            div.innerText = "🎬 " + line.replace("#","");
+        } else {
+            div.className = "line";
+            let m = line.match(/\[(.*?)\](.*)/);
+            if (m) {
+                let speaker = m[1];
+                let text = m[2];
+                if (!speakerColors[speaker]) {
+                    speakerColors[speaker] = colors[Object.keys(speakerColors).length % colors.length];
+                }
+                div.innerHTML = `<span class="speaker" style="color:${speakerColors[speaker]}">${speaker}:</span> ${text}`;
+            } else {
+                div.innerText = line;
+            }
+            div.style.fontSize = fontSizeInput.value + "px";
+            elements.push(div);
+        }
+        content.appendChild(div);
+    });
+}
+
+/* ===== PLAY CONTROL ===== */
+function togglePlay() {
+    interval ? pause() : start();
+}
+
+function start() {
+    parseText();
+    interval = setInterval(() => {
+        position += speedInput.value / 12;
+        content.style.bottom = position + "px";
+        highlight();
+    }, 30);
+}
+
+function pause() {
+    clearInterval(interval);
+    interval = null;
+}
+
+function reset() {
+    pause();
+    position = -window.innerHeight;
+    content.style.bottom = position + "px";
+}
+
+/* ===== HIGHLIGHT ===== */
+function highlight() {
+    const center = window.innerHeight / 2;
+    elements.forEach(el => {
+        const r = el.getBoundingClientRect();
+        el.classList.toggle("active", r.top < center && r.bottom > center);
+    });
+}
+
+/* ===== AVANCE MANUAL ===== */
+function stepForward() {
+    if (currentStep < elements.length - 1) {
+        currentStep++;
+        jumpToElement(currentStep);
+    }
+}
+
+function stepBackward() {
+    if (currentStep > 0) {
+        currentStep--;
+        jumpToElement(currentStep);
+    }
+}
+
+function jumpToElement(index) {
+    const el = elements[index];
+    const rect = el.getBoundingClientRect();
+    position -= rect.top - window.innerHeight / 2;
+    content.style.bottom = position + "px";
+}
+
+/* ===== TAMAÑO TEXTO ===== */
+function changeFont(delta) {
+    fontSizeInput.value = Math.min(120, Math.max(28, +fontSizeInput.value + delta));
+    document.querySelectorAll(".line").forEach(l => {
+        l.style.fontSize = fontSizeInput.value + "px";
+    });
+}
+
+fontSizeInput.addEventListener("input", () => changeFont(0));
+
+/* ===== ORIENTACIÓN ===== */
+function detectOrientation() {
+    const isPortrait = window.innerHeight > window.innerWidth;
+    orientation = isPortrait ? "portrait" : "landscape";
+    document.body.dataset.orientation = orientation;
+
+    if (orientation === "portrait") {
+        fontSizeInput.value = Math.max(fontSizeInput.value, 60);
+        speedInput.value = Math.max(speedInput.value, 90);
+        content.style.padding = "50px 24px";
+    } else {
+        fontSizeInput.value = Math.max(fontSizeInput.value, 48);
+        speedInput.value = Math.max(speedInput.value, 70);
+        content.style.padding = "40px 60px";
+    }
+
+    changeFont(0);
+}
+
+window.addEventListener("resize", detectOrientation);
+detectOrientation();
+
+/* ===== TAP ZONES ===== */
+document.querySelector(".tapRight").addEventListener("click", stepForward);
+document.querySelector(".tapLeft").addEventListener("click", stepBackward);
+
+/* ===== TECLADO / LÁPIZ ===== */
+document.addEventListener("keydown", e => {
+    if (e.code === "Space" || e.code === "Enter") togglePlay();
+    if (e.code === "PageDown") stepForward();
+    if (e.code === "PageUp") stepBackward();
+    if (e.code === "ArrowUp") changeFont(4);
+    if (e.code === "ArrowDown") changeFont(-4);
+    if (e.code === "KeyF") toggleFullscreen();
+});
+
+/* ===== UTILIDADES ===== */
+function toggleMirror() {
+    screen.classList.toggle("mirror");
+}
+
+function toggleFullscreen() {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+    else document.exitFullscreen();
+}
+
+parseText();
+</script>
+
+</body>
+</html>
